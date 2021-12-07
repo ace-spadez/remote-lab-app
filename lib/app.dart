@@ -295,16 +295,20 @@ class _ExperimentViewState extends State<ExperimentView> {
                           )),
                         ),
                         onPressed: () async {
+                          var val =  _currentValue;
+
                           if (!_connected) return;
                           setState(() {
                             _loadingAttunement = true;
-                            _dutyCycle = _currentValue;
+
 
                           });
                           ChartData cd =
                               await api.attuneDutyCycle(_currentValue);
                           setState(() {
                             _loadingAttunement = false;
+                            _dutyCycle = val;
+
                             attunement = cd;
                           });
                         },

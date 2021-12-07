@@ -38,8 +38,12 @@ class API {
   }
 
   Future<ChartData> attuneDutyCycle(int dutycycle)async{
+
+    // data.writeToFile();
+
+
     await Future.delayed(Duration(seconds: 5));
     count++;
-    return data.getAChartData(count);
+    return data.getAChartDataDutyCycle(count,dutycycle);
   }
 }
