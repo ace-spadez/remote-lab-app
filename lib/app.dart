@@ -1,8 +1,14 @@
+import 'dart:async';
+import 'dart:math';
+import 'package:numberpicker/numberpicker.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:modal_bottom_sheet/modal_bottom_sheet.dart';
+import 'package:remote_lab_app/api.dart';
 import 'package:syncfusion_flutter_charts/charts.dart';
+
+final Random random = Random();
 
 class ExperimentView extends StatefulWidget {
   ExperimentView({Key? key}) : super(key: key);
@@ -12,20 +18,136 @@ class ExperimentView extends StatefulWidget {
 }
 
 class _ExperimentViewState extends State<ExperimentView> {
-  @override
+  _ExperimentViewState() {
+    timer =
+        Timer.periodic(const Duration(milliseconds: 2000), _updateDataSource);
+    cummulativeList = [...chartData];
+  }
   bool _loading = false;
+  API api = API();
   bool _connected = false;
+  int _count = 10;
+  int _currentValue = 100;
+  int _dutyCycle = 100;
+  List<String> variables = ["Voltage", "Current", "RPM"];
+  List<String> variablesUnits = ["V", "mA", "rpm"];
 
-  List<List<double>> data = [
-    [0,0,0],
-    [1,11.1,9.3],
-    [2,20.2,20-5],
-    [3,29.9,30.5],
-    [4,44,41],
-    [5,49,56.5],
+  List<Color> varColors = [Colors.blue,Colors.red,Colors.green];
+  bool _loadingAttunement = false;
+  ChartData? attunement;
+  Timer? timer;
+  List<ChartData> chartData = List<ChartData>.generate(
+      0,
+      (i) => ChartData(list: [
+            i + 2 + random.nextDouble() - 0.5,
+            10 * (i + 2 + random.nextDouble() - 0.5),
+            3 * (i + 2 + random.nextDouble() - 0.5)
+          ], time: 200.0 + 2 * i, t: DateTime.now()));
+  List<ChartData>? cummulativeList;
 
-  ];
+  List<ChartSeriesController?> _listCSC =
+      List<ChartSeriesController?>.generate(3, (i) => null);
 
+  @override
+  void dispose() {
+    timer?.cancel();
+    super.dispose();
+  }
+
+  void _updateDataSource(Timer timer) async {
+    ChartData cd = await api.getEnvData();
+    List<ChartData> nl = [...cummulativeList ?? [], cd];
+    nl.sort((a, b) => (a.list?[0] ?? 0).compareTo(b.list?[0] ?? 0));
+    chartData.add(cd);
+    setState(() {
+      cummulativeList = [...nl];
+    });
+
+    if (chartData.length == 11) {
+      chartData.removeAt(0);
+      for (int i = 0; i < 3; i++) {
+        _listCSC[i]?.updateDataSource(
+          addedDataIndexes: <int>[chartData.length - 1],
+          removedDataIndexes: <int>[0],
+        );
+      }
+    } else {
+      for (int i = 0; i < 3; i++) {
+        _listCSC[i]?.updateDataSource(
+          addedDataIndexes: <int>[chartData.length - 1],
+        );
+      }
+    }
+    _count = _count + 1;
+  }
+
+  SfCartesianChart _buildLiveLineChart(int index) {
+    return SfCartesianChart(
+        plotAreaBorderWidth: 0,
+        primaryXAxis:
+            DateTimeAxis(majorGridLines: const MajorGridLines(width: 0)),
+        primaryYAxis: NumericAxis(
+            title: AxisTitle(
+              text: index == 0
+                  ? "voltage"
+                  : index == 1
+                      ? "current"
+                      : "rpm",
+              textStyle: GoogleFonts.b612(
+                  color: Colors.black,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 11,
+                  decoration: TextDecoration.none),
+            ),
+            axisLine: const AxisLine(width: 0),
+            majorTickLines: const MajorTickLines(size: 0)),
+        series: <LineSeries<ChartData, DateTime>>[
+          LineSeries<ChartData, DateTime>(
+            onRendererCreated: (ChartSeriesController controller) {
+              _listCSC[index] = controller;
+              // _chartSeriesController = controller;
+            },
+            dataSource: chartData,
+            color: varColors[index],
+            xValueMapper: (ChartData item, _) => item.t,
+            yValueMapper: (ChartData item, _) => item.list?[index],
+            animationDuration: 0,
+          )
+        ]);
+  }
+
+  SfCartesianChart _buildGraph(int index) {
+    return SfCartesianChart(
+        primaryXAxis: CategoryAxis(
+            title: AxisTitle(
+          text: 'Voltage(V)',
+          textStyle: GoogleFonts.b612(
+              color: Colors.black,
+              fontWeight: FontWeight.bold,
+              fontSize: 11,
+              decoration: TextDecoration.none),
+        )),
+        primaryYAxis: CategoryAxis(
+            title: AxisTitle(
+          text: index == 0 ? 'Current(mA)' : 'rpm',
+          textStyle: GoogleFonts.b612(
+              color: Colors.black,
+              fontWeight: FontWeight.bold,
+              fontSize: 11,
+              decoration: TextDecoration.none),
+        )),
+        // primaryXAxis: ,
+        series: <ChartSeries>[
+          LineSeries<ChartData, double>(
+            dataSource: cummulativeList ?? [],
+            // dashArray: <double>[5, 5],
+            xValueMapper: (ChartData item, _) => item.list?[0],
+            yValueMapper: (ChartData item, _) => item.list?[index + 1],
+          )
+        ]);
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Color.fromRGBO(250, 250, 250, 1),
@@ -41,7 +163,7 @@ class _ExperimentViewState extends State<ExperimentView> {
                 setState(() {
                   _loading = true;
                 });
-                await Future.delayed(Duration(seconds: 5));
+                await api.startExperiment();
 
                 setState(() {
                   _connected = !_connected;
@@ -92,7 +214,7 @@ class _ExperimentViewState extends State<ExperimentView> {
         // Center is a layout widget. It takes a single child and positions it
         // in the middle of the parent.
         child: Container(
-          margin: EdgeInsets.only(top:10),
+          margin: EdgeInsets.only(top: 10),
           alignment: Alignment.topLeft,
           padding: EdgeInsets.only(left: 10, right: 10, top: 10),
           child: Column(
@@ -100,39 +222,154 @@ class _ExperimentViewState extends State<ExperimentView> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               Container(
-                child:Text('Measuring the rpm of a motor using an  IR sensor',
-              style: GoogleFonts.b612(fontWeight: FontWeight.bold)),
+                child: Text('Measuring the rpm of a motor using an  IR sensor',
+                    style: GoogleFonts.b612(fontWeight: FontWeight.bold,fontSize: 20)),
               ),
               Container(
                 child: Text(
-              'Using an IR sensor, we measure the  speed of  the motor and plot RPM vs Voltage  and RPM vs current graphs',
-              style: GoogleFonts.b612()),
+                    'Using an IR sensor, we measure the  speed of  the motor and plot RPM vs Voltage  and RPM vs current graphs',
+                    style: GoogleFonts.b612()),
               ),
               Container(
-                margin: EdgeInsets.only(top:20),
-                child:Column(children: [
-                  Container(
-                    padding:EdgeInsets.only(top:5,bottom:5,right:30,left:30),
-                    margin:EdgeInsets.only(top:5,bottom:5),
-                    child: Text('Voltage (V)',style:GoogleFonts.b612(color:Colors.black)),
-                    decoration: BoxDecoration(borderRadius: BorderRadius.circular(15),color: Colors.black12),
-                    // color: Colors.white24,
-                  ),
-                  Container(
-                    padding:EdgeInsets.only(top:5,bottom:5,right:30,left:30),
-                    margin:EdgeInsets.only(top:5,bottom:5),
-                    child: Text('Current (mA)',style:GoogleFonts.b612(color:Colors.black)),
-                    decoration: BoxDecoration(borderRadius: BorderRadius.circular(15),color: Colors.black12),
-                    // color: Colors.white24,
-                  ),
-                  Container(
-                    padding:EdgeInsets.only(top:5,bottom:5,right:30,left:30),
-                    margin:EdgeInsets.only(top:5,bottom:5),
-                    child: Text('Speed (rpm)',style:GoogleFonts.b612(color:Colors.black)),
-                    decoration: BoxDecoration(borderRadius: BorderRadius.circular(15),color: Colors.black12),
-                    // color: Colors.white24,
-                  )
-                ],)
+
+                margin: EdgeInsets.only(top:20,),
+                child: Row(
+                  children: [
+                    for (int i in [0, 1, 2])
+                      Container(
+                        margin: EdgeInsets.only(right:20),
+                          child: Row(
+                        children: [
+                          Container(
+                            margin: EdgeInsets.only(right:5),
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                                color: varColors[i],
+                                borderRadius: BorderRadius.circular(5)),
+                          ),
+                          Text(variables[i],
+                          style: GoogleFonts.b612(
+                            fontWeight:FontWeight.bold
+                          ),
+                          ),
+                        ],
+                      ),
+                      )
+                  ],
+                ),
+              ),
+
+              Container(
+                margin: EdgeInsets.only(top: 20),
+                decoration: BoxDecoration(
+                    border: Border.all(width: 1, color: Colors.blueAccent),
+                    borderRadius: BorderRadius.circular(10)),
+                child: Row(
+                  children: [
+                    Spacer(),
+                    NumberPicker(
+                      value: _currentValue,
+                      minValue: 0,
+                      maxValue: 255,
+                      onChanged: (value) =>
+                          setState(() => _currentValue = value),
+                    ),
+                    TextButton(
+                        style: ButtonStyle(
+                          backgroundColor: MaterialStateProperty.all(!_connected
+                              ? Colors.grey
+                              : _loadingAttunement
+                                  ? Colors.grey
+                                  : Colors.blueAccent),
+                          padding: MaterialStateProperty.all(EdgeInsets.only(
+                            left: 20,
+                            right: 20,
+                          )),
+                          elevation: MaterialStateProperty.all(1),
+                          shape:
+                              MaterialStateProperty.all<RoundedRectangleBorder>(
+                                  RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(18.0),
+                            // side: BorderSide(color: Colors.red),
+                          )),
+                        ),
+                        onPressed: () async {
+                          if (!_connected) return;
+                          setState(() {
+                            _loadingAttunement = true;
+                            _dutyCycle = _currentValue;
+
+                          });
+                          ChartData cd =
+                              await api.attuneDutyCycle(_currentValue);
+                          setState(() {
+                            _loadingAttunement = false;
+                            attunement = cd;
+                          });
+                        },
+                        child: _loadingAttunement
+                            ? Container(
+                                width: 20,
+                                height: 20,
+                                margin: EdgeInsets.only(left: 30, right: 30),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.black,
+                                ),
+                              )
+                            : Text(
+                                _connected
+                                    ? 'Attune Duty Cycle'
+                                    : 'Connect to attune',
+                                style: GoogleFonts.b612(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ))),
+                    Spacer(),
+                  ],
+                ),
+              ),
+              attunement==null?Container():
+              Container(
+                child: Column(
+                  children: [
+                     Container(
+                        margin: EdgeInsets.only(right:20,top:5),
+                          child: Row(
+                        children: [
+                        
+                          Text("Attunement duty cycle "+_dutyCycle.toString() ,
+                          style: GoogleFonts.b612(
+                            // fontWeight:FontWeight.bold
+                          ),
+                          ),
+                        ],
+                      ),
+                      ),
+   for (int i in [0, 1, 2])
+                      Container(
+                        margin: EdgeInsets.only(right:20,top:5),
+                          child: Row(
+                        children: [
+                          Container(
+                            margin: EdgeInsets.only(right:5),
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                                color: varColors[i],
+                                borderRadius: BorderRadius.circular(5)),
+                          ),
+                          Text("Attuned "+variables[i] +" "+((attunement?.list?[i])??0.0).toStringAsFixed(3)+variablesUnits[i],
+                          style: GoogleFonts.b612(
+                            // fontWeight:FontWeight.bold
+                          ),
+                          ),
+                        ],
+                      ),
+                      )
+                  ],
+                ),
               )
             ],
           ),
@@ -149,66 +386,103 @@ class _ExperimentViewState extends State<ExperimentView> {
                     showCupertinoModalBottomSheet(
                       context: context,
                       builder: (context) => SingleChildScrollView(
-                        
                         controller: ModalScrollController.of(context),
-                        child:_connected? Container(
-                          padding: EdgeInsets.only(top:50,left:20,right:20),
-                          height:  MediaQuery.of(context).size.height,
-                          width:  MediaQuery.of(context).size.width,
-                          child:Column(children: [
-                            SfCartesianChart(
-                              primaryXAxis:   CategoryAxis(
-                                title: AxisTitle(text: 'Voltage(V)')
-                              ),
-                              primaryYAxis:   CategoryAxis(
-                                title: AxisTitle(text: 'Current(mA)')
-                              ),
-                              // primaryXAxis: ,
-                              series:  <ChartSeries>[
-                                LineSeries<List<double>,double>(
-                                  dataSource: data,
-                                  dashArray: <double>[5, 5],
-                                  xValueMapper: (List<double> item,_)=> item[0],
-                                  yValueMapper: (List<double> item,_)=> item[1],
-                    
-                                )
-                              ]
-                            ),
-                          SfCartesianChart(
-                             primaryXAxis:   CategoryAxis(
-                                title: AxisTitle(text: 'Voltage(V)')
-                              ),
-                              primaryYAxis:   CategoryAxis(
-                                title: AxisTitle(text: 'Speed (rpm)')
-                              ),
-                              // primaryXAxis: ,
-                              series:  <ChartSeries>[
-                                LineSeries<List<double>,double>(
-                                  dataSource: data,
-                                  dashArray: <double>[5, 5],
-                                  xValueMapper: (List<double> item,_)=> item[0],
-                                  yValueMapper: (List<double> item,_)=> item[2],
-                                )
-                              ]
-                            ),
-                          ],)
-                        ):Container(
-                                                    padding: EdgeInsets.only(top:50,left:20,right:20),
-                          height:  MediaQuery.of(context).size.height,
-                          width:  MediaQuery.of(context).size.width,
-                          alignment: Alignment.topCenter,
-                          child:Text('Please Connect to the remote lab first',style: GoogleFonts.b612(
-                            color:Colors.black,
-                            fontSize:12,
-
-                          ),)
-                        ),
+                        child: _connected
+                            ? Container(
+                                padding: const EdgeInsets.only(
+                                    top: 20, left: 10, right: 20),
+                                decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(20)),
+                                height:
+                                    MediaQuery.of(context).size.height - 100,
+                                width: MediaQuery.of(context).size.width,
+                                child: Column(
+                                  children: [
+                                    Text(
+                                      "Drag down to close",
+                                      style: GoogleFonts.b612(
+                                          color: Colors.grey,
+                                          fontSize: 10,
+                                          decoration: TextDecoration.none),
+                                    ),
+                                    _buildGraph(0),
+                                    _buildGraph(1)
+                                  ],
+                                ))
+                            : Container(
+                                padding: EdgeInsets.only(
+                                    top: 20, left: 20, right: 20),
+                                height:
+                                    MediaQuery.of(context).size.height - 100,
+                                width: MediaQuery.of(context).size.width,
+                                alignment: Alignment.topCenter,
+                                child: Text(
+                                  'Please Connect to the remote lab first',
+                                  style: GoogleFonts.b612(
+                                      color: Colors.black,
+                                      fontSize: 10,
+                                      decoration: TextDecoration.none),
+                                )),
                       ),
                     );
                   },
                   child: Icon(Icons.graphic_eq)),
               label: ''),
-          BottomNavigationBarItem(icon: Icon(Icons.ac_unit), label: '',),
+          BottomNavigationBarItem(
+              icon: GestureDetector(
+                  onTap: () {
+                    showCupertinoModalBottomSheet(
+                      context: context,
+                      builder: (context) => SingleChildScrollView(
+                        controller: ModalScrollController.of(context),
+                        child: _connected
+                            ? Container(
+                                padding: const EdgeInsets.only(
+                                    top: 20, left: 10, right: 20),
+                                decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(20)),
+                                height:
+                                    MediaQuery.of(context).size.height - 100,
+                                width: MediaQuery.of(context).size.width,
+                                child: SingleChildScrollView(
+                                  child: Column(
+                                    children: [
+                                      Text(
+                                        "Drag down to close",
+                                        style: GoogleFonts.b612(
+                                            color: Colors.grey,
+                                            fontSize: 10,
+                                            decoration: TextDecoration.none),
+                                      ),
+                                      _buildLiveLineChart(0),
+                                      _buildLiveLineChart(1),
+                                      _buildLiveLineChart(2),
+                                    ],
+                                  ),
+                                ))
+                            : Container(
+                                padding: const EdgeInsets.only(
+                                    top: 20, left: 20, right: 20),
+                                height:
+                                    MediaQuery.of(context).size.height - 100,
+                                width: MediaQuery.of(context).size.width,
+                                alignment: Alignment.topCenter,
+                                child: Text(
+                                  'Please Connect to the remote lab first',
+                                  style: GoogleFonts.b612(
+                                      color: Colors.black,
+                                      fontSize: 10,
+                                      decoration: TextDecoration.none),
+                                )),
+                      ),
+                    );
+                  },
+                  child: Icon(Icons.ac_unit)),
+              label: ''),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.settings),
+            label: '',
+          ),
         ],
       ),
     );
